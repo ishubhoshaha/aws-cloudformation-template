@@ -1,0 +1,127 @@
+
+Parameters:
+  paramKeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+  
+  paramSGDesc:
+    Description: Security Group Description
+    Type: String
+
+  paramInstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+    - t2.micro
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-07ebfd5b3428b6f4d
+    us-east-2:
+      AMI: ami-0fc20dd1da406780b
+
+Resources:
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 192.168.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Join ['',[!Ref "AWS::StackName", "-VPC"]]
+  myInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-IGW"]]
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref myVPC
+      InternetGatewayId: !Ref myInternetGateway
+  
+  myPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock: 192.168.1.0/24
+      AvailabilityZone:
+        Fn::Select: 
+        - 0
+        - Fn::GetAZs: "us-east-1"
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-PublicSubnet"]]
+  
+  myPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-RouteTable"]]
+  AttachIGW:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref myPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref myInternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref myPublicSubnet
+      RouteTableId: !Ref myPublicRouteTable
+
+  myLinuxEC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: myVPC
+    Properties:
+      KeyName: !Ref paramKeyName
+      ImageId:
+        Fn::FindInMap:
+          - RegionMap
+          - !Ref AWS::Region
+          - AMI
+      InstanceType: !Ref paramInstanceType
+      SecurityGroupIds:
+        - !Ref WebSG
+      UserData: !Base64 |
+        #!/bin/bash
+        sudo apt-get update
+        sudo apt-get -y upgrade
+        sudo apt-get -y install nginx
+        sudo service nginx start
+        sudo service nginx enable
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref "AWS::StackName", "-WebServer"]]
+  
+  WebSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Ref paramSGDesc
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+Outputs:
+  WebServerIP:
+    Description: IP Address of our WebServer
+    Value: !GetAtt
+      - myLinuxEC2Instance
+      - PublicIp
